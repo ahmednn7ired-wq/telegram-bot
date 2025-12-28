@@ -1,4 +1,4 @@
-mport sqlite3
+import sqlite3
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
