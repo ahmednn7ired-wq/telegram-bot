@@ -1,33 +1,28 @@
 import os
-# ===== ПРОВЕРКА ЗАПУСКА ФАЙЛА =====
-print("ФАЙЛ bot.py ЗАПУЩЕН")
-
-import random
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask, request
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
-# ===== НАСТРОЙКИ =====
+# ================== НАСТРОЙКИ ==================
 
-TOKEN = TOKEN = os.getenv("8315164729:AAGIs5fCGR2fFUjtCpQYLYpjpf14zrAA5uw")
-        
-ADMIN_ID = 5623880358   # ← ВСТАВЬ СЮДА СВОЙ TELEGRAM ID (ЦИФРЫ!)
+TOKEN = "8315164729:AAGIs5fCGR2fFUjtCpQYLYpjpf14zrAA5uw"
+ADMIN_ID = 5623880358 # твой Telegram ID (число)
+CHANNEL_USERNAME = "@progfam"     # канал для подписки
+DB_NAME = "bot.db"
 
-CHANNELS = [
-    "@progfam"
-]
+# ===============================================
 
-# ===== БАЗА ДАННЫХ =====
+# ---------- БАЗА ДАННЫХ ----------
 
-db = sqlite3.connect("bot.db", check_same_thread=False)
-cursor = db.cursor()
+conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+cursor = conn.cursor()
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -37,134 +32,111 @@ CREATE TABLE IF NOT EXISTS users (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS videos (
-    file_id TEXT PRIMARY KEY
+    file_id TEXT
 )
 """)
 
-db.commit()
+conn.commit()
 
-# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 
-async def is_subscribed(user_id, context):
-    for channel in CHANNELS:
-        member = await context.bot.get_chat_member(channel, user_id)
-        if member.status not in ("member", "administrator", "creator"):
-            return False
-    return True
-
-
-def user_received_video(user_id):
+def user_exists(user_id: int) -> bool:
     cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
     return cursor.fetchone() is not None
 
 
-def save_user(user_id):
+def add_user(user_id: int):
     cursor.execute("INSERT OR IGNORE INTO users VALUES (?)", (user_id,))
-    db.commit()
+    conn.commit()
 
 
-def get_random_video():
-    cursor.execute("SELECT file_id FROM videos ORDER BY RANDOM() LIMIT 1")
-    row = cursor.fetchone()
-    return row[0] if row else None
+def save_video(file_id: str):
+    cursor.execute("INSERT INTO videos VALUES (?)", (file_id,))
+    conn.commit()
 
 
-def subscribe_keyboard():
-    buttons = []
-    for ch in CHANNELS:
-        buttons.append([
-            InlineKeyboardButton(
-                f"📢 Подписаться {ch}",
-                url=f"https://t.me/{ch[1:]}"
-            )
-        ])
-    buttons.append([
-        InlineKeyboardButton("✅ Проверить подписку", callback_data="check")
-    ])
-    return InlineKeyboardMarkup(buttons)
+def get_videos():
+    cursor.execute("SELECT file_id FROM videos")
+    return [row[0] for row in cursor.fetchall()]
 
-# ===== ХЭНДЛЕРЫ =====
+
+async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except:
+        return False
+
+
+# ---------- ХЕНДЛЕРЫ ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("ПОЛУЧЕНА КОМАНДА /start")
-
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
 
     if not await is_subscribed(user_id, context):
         await update.message.reply_text(
-            "Подпишись на канал, чтобы получить видео 👇",
-            reply_markup=subscribe_keyboard()
+            f"❗ Подпишись на канал:\n{CHANNEL_USERNAME}\n\n"
+            "После подписки нажми /start"
         )
         return
 
-    if user_received_video(user_id):
-        await update.message.reply_text("❌ Ты уже получал видео")
+    if user_exists(user_id):
+        await update.message.reply_text("❗ Ты уже получал видео.")
         return
 
-    video = get_random_video()
-    if not video:
-        await update.message.reply_text("❌ Видео пока не добавлены")
+    add_user(user_id)
+
+    videos = get_videos()
+    if not videos:
+        await update.message.reply_text("❗ Видео пока не добавлены.")
         return
 
-    await context.bot.send_video(chat_id=chat_id, video=video)
-    save_user(user_id)
+    for file_id in videos:
+        await update.message.reply_video(file_id)
+
+    await update.message.reply_text("✅ Все видео отправлены!")
 
 
-async def check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-
-    if not await is_subscribed(user_id, context):
-        await query.message.reply_text(
-            "❌ Ты не подписан на канал",
-            reply_markup=subscribe_keyboard()
-        )
-        return
-
-    if user_received_video(user_id):
-        await query.message.reply_text("❌ Ты уже получал видео")
-        return
-
-    video = get_random_video()
-    if not video:
-        await query.message.reply_text("❌ Видео пока не добавлены")
-        return
-
-    await context.bot.send_video(chat_id=chat_id, video=video)
-    save_user(user_id)
-
-
-async def add_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("ПОЛУЧЕНО ВИДЕО")
-
+async def admin_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        print("НЕ АДМИН")
         return
 
-    if update.message.video:
-        file_id = update.message.video.file_id
-        cursor.execute("INSERT OR IGNORE INTO videos VALUES (?)", (file_id,))
-        db.commit()
-        await update.message.reply_text("✅ Видео добавлено")
+    if not update.message.video:
+        return
 
-# ===== ЗАПУСК =====
+    save_video(update.message.video.file_id)
+    await update.message.reply_text("✅ Видео сохранено.")
 
-def main():
-    print("MAIN ЗАПУЩЕН")
 
-    app = ApplicationBuilder().token(TOKEN).build()
+# ---------- FLASK + TELEGRAM ----------
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(check_callback, pattern="check"))
-    app.add_handler(MessageHandler(filters.VIDEO, add_video))
+app = Flask(__name__)
+telegram_app = Application.builder().token(TOKEN).build()
 
-    print("🤖 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
-    app.run_polling()
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.VIDEO, admin_video))
 
+
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is running!"
+
+
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return "ok"
+
+
+# ---------- ЗАПУСК ----------
 
 if __name__ == "__main__":
-    main()
+    PORT = int(os.environ.get("PORT", 10000))
+
+    telegram_app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=os.environ.get("WEBHOOK_URL") + "/webhook"
+    )
