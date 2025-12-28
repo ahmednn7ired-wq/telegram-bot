@@ -1,23 +1,22 @@
-import os
-import sqlite3
-from flask import Flask, request
+mport sqlite3
 from telegram import Update
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters,
+    filters
 )
 
-# ================== НАСТРОЙКИ ==================
+# ================= НАСТРОЙКИ =================
 
 TOKEN = "8315164729:AAGIs5fCGR2fFUjtCpQYLYpjpf14zrAA5uw"
-ADMIN_ID = 5623880358 # твой Telegram ID (число)
-CHANNEL_USERNAME = "@progfam"     # канал для подписки
+ADMIN_ID = 5623880358 # твой Telegram ID
+CHANNEL_USERNAME = "@progfam"
 DB_NAME = "bot.db"
 
-# ===============================================
+# =============================================
+
 
 # ---------- БАЗА ДАННЫХ ----------
 
@@ -38,7 +37,8 @@ CREATE TABLE IF NOT EXISTS videos (
 
 conn.commit()
 
-# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
+
+# ---------- ФУНКЦИИ ----------
 
 def user_exists(user_id: int) -> bool:
     cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
@@ -108,35 +108,18 @@ async def admin_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Видео сохранено.")
 
 
-# ---------- FLASK + TELEGRAM ----------
-
-app = Flask(__name__)
-telegram_app = Application.builder().token(TOKEN).build()
-
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.VIDEO, admin_video))
-
-
-@app.route("/", methods=["GET"])
-def index():
-    return "Bot is running!"
-
-
-@app.route("/webhook", methods=["POST"])
-async def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return "ok"
-
-
 # ---------- ЗАПУСК ----------
 
-if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 10000))
+def main():
+    print("Бот запущен 24/7 (polling)")
 
-    telegram_app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=os.environ.get("WEBHOOK_URL") + "/webhook"
-    )
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VIDEO, admin_video))
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
